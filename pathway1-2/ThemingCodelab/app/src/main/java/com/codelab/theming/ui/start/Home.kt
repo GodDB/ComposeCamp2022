@@ -42,6 +42,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -175,6 +176,7 @@ private fun PostMetadata(
     }
     Text(
         text = text,
+        style = MaterialTheme.typography.body1,
         modifier = modifier
     )
 }
@@ -191,6 +193,7 @@ fun PostItem(
             .padding(vertical = 8.dp),
         icon = {
             Image(
+                modifier = Modifier.clip(MaterialTheme.shapes.small),
                 painter = painterResource(post.imageThumbId),
                 contentDescription = null
             )
