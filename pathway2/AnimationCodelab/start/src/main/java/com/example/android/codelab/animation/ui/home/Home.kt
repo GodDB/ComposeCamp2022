@@ -16,7 +16,26 @@
 
 package com.example.android.codelab.animation.ui.home
 
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColor
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.TweenSpec
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.calculateTargetValue
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.defaultDecayAnimationSpec
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.splineBasedDecay
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -80,6 +99,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.consumePositionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
@@ -102,6 +122,8 @@ import com.example.android.codelab.animation.ui.Purple700
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.absoluteValue
+import kotlin.math.roundToInt
 
 private enum class TabPage {
     Home, Work
@@ -157,8 +179,10 @@ fun Home() {
     val lazyListState = rememberLazyListState()
 
     // The background color. The value is changed by the current tab.
-    // TODO 1: Animate this color change.
-    val backgroundColor = if (tabPage == TabPage.Home) Purple100 else Green300
+    val backgroundColor by animateColorAsState(
+        targetValue = if (tabPage == TabPage.Home) Purple100 else Green300,
+        animationSpec = tween(1000)
+    )
 
     // The coroutine scope for event handlers calling suspend functions.
     val coroutineScope = rememberCoroutineScope()
@@ -271,7 +295,7 @@ private fun HomeFloatingActionButton(
             )
             // Toggle the visibility of the content with animation.
             // TODO 2-1: Animate this visibility change.
-            if (extended) {
+            AnimatedVisibility(visible = extended) {
                 Text(
                     text = stringResource(R.string.edit),
                     modifier = Modifier
@@ -290,7 +314,13 @@ private fun EditMessage(shown: Boolean) {
     // TODO 2-2: The message should slide down from the top on appearance and slide up on
     //           disappearance.
     AnimatedVisibility(
-        visible = shown
+        visible = shown,
+        enter = slideInVertically(
+            initialOffsetY = { fullHeight -> -fullHeight }
+        ),
+        exit = slideOutVertically(
+            targetOffsetY = { fullHeight -> -fullHeight }
+        )
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth(),
@@ -364,6 +394,7 @@ private fun TopicRow(topic: String, expanded: Boolean, onClick: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
+                .animateContentSize(tween(3000))
         ) {
             Row {
                 Icon(
@@ -443,9 +474,16 @@ private fun HomeTabIndicator(
     tabPage: TabPage
 ) {
     // TODO 4: Animate these value changes.
-    val indicatorLeft = tabPositions[tabPage.ordinal].left
-    val indicatorRight = tabPositions[tabPage.ordinal].right
-    val color = if (tabPage == TabPage.Home) Purple700 else Green800
+    val transition = updateTransition(targetState = tabPage, label = "")
+    val indicatorLeft by transition.animateDp(label = "") {
+        tabPositions[it.ordinal].left
+    }
+    val indicatorRight by transition.animateDp(label = "") {
+        tabPositions[it.ordinal].right
+    }
+    val color by transition.animateColor(label ="") {
+        if (it == TabPage.Home) Purple700 else Green800
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -530,8 +568,15 @@ private fun WeatherRow(
  */
 @Composable
 private fun LoadingRow() {
-    // TODO 5: Animate this value between 0f and 1f, then back to 0f repeatedly.
-    val alpha = 1f
+    // TODO 5: Animate this value between 0f and 1f, then back to 0f repeatedly.'
+    val infiniteTranstion = rememberInfiniteTransition()
+    val alpha by infiniteTranstion.animateFloat(initialValue = 0f, targetValue = 1f, animationSpec = InfiniteRepeatableSpec(
+        repeatMode = RepeatMode.Reverse,
+        animation = keyframes {
+            durationMillis = 1000
+            0.7f at 500
+        }
+    ))
     Row(
         modifier = Modifier
             .heightIn(min = 64.dp)
@@ -591,48 +636,81 @@ private fun TaskRow(task: String, onRemove: () -> Unit) {
  *
  * @param onDismissed Called when the element is swiped to the edge of the screen.
  */
+
+/**
+ * 가로 스와이프 이벤트를 구현한 modifier
+ *
+ * 구현 핵심은 가로 드래그 이벤트 속도를 계산해서 플링 이벤트인지를 추려낸다. (splineBaseDecay - 플링이벤트 계산기 / velocityTracker - 제스처 속도 계산기)
+ * 이때 플링 이벤트이면 애니메이션을 동작시켜서 화면 바깥으로 벗어나게 해야한다.
+ * 그렇다면 제스처 이벤트 동안 애니메이션이 알고 있는 값도 같이 갱신되어야 한다. (snapTo를 통해 동기화)
+ * 그래서 최종적으로 터치 이벤트가 종료되면 플링 이벤트인지 추려내서 1)플링 이벤트다 -> 화면바깥으로 애니메이션 2)아니다 -> 원위치 애니메이션을 한다
+ */
+
 private fun Modifier.swipeToDismiss(
     onDismissed: () -> Unit
 ): Modifier = composed {
-    // TODO 6-1: Create an Animatable instance for the offset of the swiped element.
+    // This Animatable stores the horizontal offset for the element.
+    val offsetX = remember { Animatable(0f) }
     pointerInput(Unit) {
-        // Used to calculate a settling position of a fling animation.
+
+        // 플링 애니메이션이 멈추는 위치를 계산하기 위해 사용
         val decay = splineBasedDecay<Float>(this)
         // Wrap in a coroutine scope to use suspend functions for touch events and animation.
         coroutineScope {
             while (true) {
-                // Wait for a touch down event.
+                // 터치 할 때까지 대기
                 val pointerId = awaitPointerEventScope { awaitFirstDown().id }
-                // TODO 6-2: Touch detected; the animation should be stopped.
-                // Prepare for drag events and record velocity of a fling.
+
+                // 애니메이션이 실행중이라면 종료
+                offsetX.stop()
+
+                // 이벤트 속도 계산기 (플링 이벤트 감지하기 위함)
                 val velocityTracker = VelocityTracker()
-                // Wait for drag events.
+
+                // 드래그 이벤트 대기
                 awaitPointerEventScope {
                     horizontalDrag(pointerId) { change ->
-                        // TODO 6-3: Apply the drag change to the Animatable offset.
-                        // Record the velocity of the drag.
+
+                        // 기존 offset과 드래그 이벤트로 인한 변화량을 구한다.
+                        val horizontalDragOffset = offsetX.value + change.positionChange().x
+                        launch {
+                            // 애니메이터가 알고 있는 값을 변경한다 (애니메이션 없이)
+                            offsetX.snapTo(horizontalDragOffset)
+                        }
+                        // 드래그 이벤트 속도 기록
                         velocityTracker.addPosition(change.uptimeMillis, change.position)
-                        // Consume the gesture event, not passed to external
-                        if (change.positionChange() != Offset.Zero) change.consume()
+                        // 이벤트 컨슘처리 (다른 하위 뷰에게 전달되지 않도록)
+                        change.consumePositionChange()
                     }
                 }
-                // Dragging finished. Calculate the velocity of the fling.
+                // 드래그 이벤트 속도 계산
                 val velocity = velocityTracker.calculateVelocity().x
-                // TODO 6-4: Calculate the eventual position where the fling should settle
-                //           based on the current offset value and velocity
-                // TODO 6-5: Set the upper and lower bounds so that the animation stops when it
-                //           reaches the edge.
+
+                // 플링 계산 (현위치까지 이정도의 속도로 왔으면 어느정도로 보내야하냐?)
+                val targetOffsetX = decay.calculateTargetValue(offsetX.value, velocity)
+
+                // 애니메이션이 멈추는 범위 지정 (왼쪽 -size만큼 오른쪽 +size만큼 벗어나면 애니메이션 종료)
+                offsetX.updateBounds(
+                    lowerBound = -size.width.toFloat(),
+                    upperBound = size.width.toFloat()
+                )
                 launch {
-                    // TODO 6-6: Slide back the element if the settling position does not go beyond
-                    //           the size of the element. Remove the element if it does.
+                    // 플링이 화면을 벗어날 정도로 속도가 충분하지 않았다.
+                    if (targetOffsetX.absoluteValue <= size.width) {
+                        // Not enough velocity; Slide back to the default position.
+                        offsetX.animateTo(targetValue = 0f, initialVelocity = velocity)
+                    } else {
+                        // 속도가 충분했다.
+                        offsetX.animateDecay(velocity, decay)
+                        // The element was swiped away.
+                        onDismissed()
+                    }
                 }
             }
         }
     }
-        .offset {
-            // TODO 6-7: Use the animating offset value here.
-            IntOffset(0, 0)
-        }
+        // Apply the horizontal offset to the element.
+        .offset { IntOffset(offsetX.value.roundToInt(), 0) }
 }
 
 @Preview
